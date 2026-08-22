@@ -1,9 +1,7 @@
 # ultra
 
 [![npm](https://img.shields.io/npm/v/agent-ultramode?logo=npm&color=cb3837)](https://www.npmjs.com/package/agent-ultramode)
-[![downloads](https://img.shields.io/npm/dm/agent-ultramode?color=blue)](https://www.npmjs.com/package/agent-ultramode)
 [![release](https://img.shields.io/github/v/release/maverick-tr/agent-ultramode?color=blue)](https://github.com/maverick-tr/agent-ultramode/releases)
-[![stars](https://img.shields.io/github/stars/maverick-tr/agent-ultramode?style=flat)](https://github.com/maverick-tr/agent-ultramode/stargazers)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 Took the [LLM-as-a-Verifier](https://github.com/llm-as-a-verifier/llm-as-a-verifier) paper (Kwok et al., 2026) and turned it into a simple `/ultra` command for coding agents.
