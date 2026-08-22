@@ -14,9 +14,6 @@ And unlike most "add a verifier" posts, I benchmarked it before believing it. Th
 
 <video src="https://github.com/user-attachments/assets/16154364-b2d0-4361-a0ff-81a02375577b" controls muted playsinline width="100%"></video>
 
-
-> For a reliable inline player on GitHub, edit this README on github.com and drag `ultramode.mp4` into the editor; GitHub inserts a `https://github.com/.../assets/...` URL that plays inline. The file is committed at [`ultramode.mp4`](./ultramode.mp4).
-
 ## The receipts
 
 Benchmarked on **Terminal-Bench** with **DeepSeek V4 Flash 0731** as both the agent and the verifier, running inside **opencode** (N=5 attempts, same-model verifier). Verified end to end with both **OpenCode** and **Claude Code** as the agent (the numbers above are the OpenCode run; a Claude Code number will be added once benchmarked). Works with any agent, not just opencode.
