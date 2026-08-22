@@ -12,7 +12,7 @@ And unlike most "add a verifier" posts, I benchmarked it before believing it. Th
 
 ## Demo
 
-<video src="https://github.com/user-attachments/assets/16154364-b2d0-4361-a0ff-81a02375577b" controls muted playsinline width="100%"></video>
+<video src="https://github.com/user-attachments/assets/134487dc-1d60-434b-a2dc-97cfd5942959" controls muted playsinline width="100%"></video>
 
 ## The receipts
 
