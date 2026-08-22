@@ -1,0 +1,46 @@
+{
+  "name": "agent-ultramode",
+  "version": "0.1.0",
+  "description": "Best-of-N for coding agents with a same-model verifier: run your task N times in isolated git worktrees and apply the verified winner. A /ultra command for opencode.",
+  "module": "ultra.ts",
+  "main": "ultra.ts",
+  "exports": {
+    ".": "./ultra.ts"
+  },
+  "type": "module",
+  "bin": {
+    "agent-ultramode": "cli.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "ultra.ts",
+    "cli.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "best-of-n",
+    "verifier",
+    "llm-as-a-verifier",
+    "coding-agent",
+    "ultra"
+  ],
+  "license": "MIT",
+  "author": "maverick-tr (https://github.com/maverick-tr)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maverick-tr/agent-ultramode.git"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.0.153",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
