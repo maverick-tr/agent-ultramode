@@ -142,7 +142,7 @@ The verifier needs an OpenAI-compatible endpoint: by default it reads `OPENAI_AP
 
 ## Why I built this, and the honest story
 
-I wanted to know if best-of-N verification could squeeze real quality out of a cheap-but-capable model without reaching for a bigger, pricier one. So, ran it on real Terminal-Bench tasks and let the numbers decide. What I found:
+I wanted to know if best-of-N verification could squeeze real quality out of a small-but-capable model without reaching for a bigger, pricier one. So, ran it on real Terminal-Bench tasks and let the numbers decide. What I found:
 
 - **Planning-first best-of-N does nothing for execution tasks.** Drafting N plans, picking the best, then executing once: **0 out of 5** outcomes changed on Terminal-Bench, at 3 to 10 times the cost. It amplifies effort, not capability. I dropped it.
 - **Best-of-N over full trajectories plus a same-model verifier does work.** This is the version that ships.
