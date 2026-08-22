@@ -171,10 +171,11 @@ The 15 tasks were deliberately failure-skewed, so the +9 points is not what you 
 
 ## Credits
 
-The verification method is the **Probabilistic Pivot Tournament** from **LLM-as-a-Verifier** (Kwok et al., 2026), reimplemented from the paper. The `K`-sample reward estimate and the apply policy are my adaptations. The self-verification ceiling I ran into is documented in the cross-model and weak-verifier literature, worth reading before you assume same-model verification is a free lunch:
+The verification method is the **Probabilistic Pivot Tournament** from **LLM-as-a-Verifier** (Kwok et al., 2026), reimplemented from the paper. The authors maintain the **official implementation, [TurboAgent](https://github.com/llm-as-a-verifier/TurboAgent)** (a proxy for Claude Code and opencode); for clean, paper-faithful benchmark numbers, that is the tighter match. I built this before I knew other implementations existed, wanting a same-model, agent-agnostic drop-in: a **reasoned** pairwise verifier (so it self-verifies with the same model, or any model, with no logprobs and no separate verifier model), plus a confidence-gated apply policy and isolated git worktrees, my adaptations on top of the PPT. The self-verification ceiling I ran into is documented in the cross-model and weak-verifier literature, worth reading before you assume same-model verification is a free lunch:
 
 - Paper: [arXiv:2607.05391](https://arxiv.org/abs/2607.05391)
 - Repo: [llm-as-a-verifier/llm-as-a-verifier](https://github.com/llm-as-a-verifier/llm-as-a-verifier)
+- Official implementation: [llm-as-a-verifier/TurboAgent](https://github.com/llm-as-a-verifier/TurboAgent)
 - On the ceiling: [LLM-as-a-Jury (cross-model)](https://arxiv.org/html/2607.10139), [Weaver: weak verifiers](https://arxiv.org/html/2506.18203), [Generative Verifiers](https://arxiv.org/pdf/2408.15240)
 
 ```bibtex
