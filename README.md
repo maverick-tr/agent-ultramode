@@ -14,11 +14,11 @@ And unlike most "add a verifier" posts, I benchmarked it before believing it. Th
 
 <video src="https://github.com/user-attachments/assets/134487dc-1d60-434b-a2dc-97cfd5942959" controls muted playsinline width="100%"></video>
 
-[▶ Watch the demo](https://github.com/maverick-tr/agent-ultramode/blob/main/ultramode.mp4) (55s, opencode + DeepSeek V4 Flash)
+[▶ Watch the demo](https://github.com/user-attachments/assets/134487dc-1d60-434b-a2dc-97cfd5942959) (55s, opencode + DeepSeek V4 Flash)
 
 ## The receipts
 
-Benchmarked on **Terminal-Bench** with **DeepSeek V4 Flash 0731** as both the agent and the verifier, running inside **opencode** (N=5 attempts, same-model verifier). Verified end to end with both **OpenCode** and **Claude Code** as the agent (the numbers above are the OpenCode run; a Claude Code number will be added once benchmarked). Works with any agent, not just opencode.
+Benchmarked on **Terminal-Bench** with **DeepSeek V4 Flash 0731** as both the agent and the verifier, running inside **opencode** (N=5 attempts, same-model verifier). Verified end to end with **OpenCode**, **Claude Code**, and **cline** as the agent (the numbers above are the OpenCode run; a Claude Code number will be added once benchmarked). Works with any agent, not just opencode.
 
 | Slice | base@1 (single shot) | ultra (best-of-N + verify) | oracle@5 (ceiling) |
 |---|:---:|:---:|:---:|
@@ -165,7 +165,7 @@ The 15 tasks were deliberately failure-skewed, so the +9 points is not what you 
 
 - [x] **Standalone CLI** (`npx agent-ultramode`) so the loop runs anywhere, with any agent, no opencode required.
 - [x] **Multiple models in one pass** (repeatable `--agent`): spread attempts across different models, one neutral verifier picks the best.
-- [x] **OpenCode and Claude Code** verified end to end.
+- [x] **OpenCode, Claude Code, and cline** verified end to end.
 - [ ] **First-class agent integrations** with tuned defaults, and a benchmark number, for Claude Code, Grok, Pi, and Codex.
 - [ ] Native slash-command or MCP packaging per agent. Contributions welcome.
 
