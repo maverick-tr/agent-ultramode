@@ -1,6 +1,6 @@
 {
   "name": "agent-ultramode",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Best-of-N for coding agents with a same-model verifier: run your task N times in isolated git worktrees and apply the verified winner. A /ultra command for opencode.",
   "module": "ultra.ts",
   "main": "ultra.ts",

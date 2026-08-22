@@ -80,7 +80,7 @@ That is the whole setup. With no options it drafts and verifies with your **curr
 { "plugin": [ ["agent-ultramode", { "model": "myprovider/my-model" }] ] }
 ```
 
-**Run a different agent (Claude Code, Grok, Pi, Codex, ...).** The `agent` option is the command run once per attempt, with `{task}` substituted and the cwd set to an isolated worktree. Point it at any CLI that edits files and exits:
+**Run a different agent (Claude Code, cline, Grok, Pi, Codex, ...).** The `agent` option is the command run once per attempt, with `{task}` substituted and the cwd set to an isolated worktree. Point it at any CLI that edits files and exits:
 
 ```jsonc
 ["agent-ultramode", { "agent": "claude -p --dangerously-skip-permissions \"{task}\"" }]  // Claude Code (verified)
@@ -166,12 +166,12 @@ The 15 tasks were deliberately failure-skewed, so the +9 points is not what you 
 - [x] **Standalone CLI** (`npx agent-ultramode`) so the loop runs anywhere, with any agent, no opencode required.
 - [x] **Multiple models in one pass** (repeatable `--agent`): spread attempts across different models, one neutral verifier picks the best.
 - [x] **OpenCode, Claude Code, and cline** verified end to end.
-- [ ] **First-class agent integrations** with tuned defaults, and a benchmark number, for Claude Code, Grok, Pi, and Codex.
+- [ ] **First-class agent integrations** (tuned defaults and a benchmark number) for Grok, Pi, and Codex.
 - [ ] Native slash-command or MCP packaging per agent. Contributions welcome.
 
 ## Credits
 
-The verification method is the **Probabilistic Pivot Tournament** from **LLM-as-a-Verifier** (Kwok et al., 2026), reimplemented from the paper. The `K`-sample reward estimate and the apply policy are our adaptations. The self-verification ceiling we ran into is documented in the cross-model and weak-verifier literature, worth reading before you assume same-model verification is a free lunch:
+The verification method is the **Probabilistic Pivot Tournament** from **LLM-as-a-Verifier** (Kwok et al., 2026), reimplemented from the paper. The `K`-sample reward estimate and the apply policy are my adaptations. The self-verification ceiling I ran into is documented in the cross-model and weak-verifier literature, worth reading before you assume same-model verification is a free lunch:
 
 - Paper: [arXiv:2607.05391](https://arxiv.org/abs/2607.05391)
 - Repo: [llm-as-a-verifier/llm-as-a-verifier](https://github.com/llm-as-a-verifier/llm-as-a-verifier)
