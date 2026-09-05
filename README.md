@@ -233,10 +233,6 @@ The verifier needs an OpenAI-compatible endpoint: by default it reads `OPENAI_AP
 
 One plugin serves all three, each using its host's own subagent primitive: Grok's `spawn_subagent` with worktree isolation, Claude Code's `Agent` tool, and opencode's own worktree runner. The best-of-N, verify and repair loop is identical; only the fan-out mechanism and the progress UI change. Both the Claude Code and Grok paths are verified end to end.
 
-## DeepSeek Harness (experimental)
-
-A native DeepSeek Harness `/ultra` plugin exists but is not recommended yet: the harness surfaces each attempt as a separate child session, which is noisy in the web UI. Use the Grok or Claude Code plugins above for a clean native `/ultra` today.
-
 ## Why I built this, and the honest story
 
 I wanted to know if best-of-N verification could squeeze real quality out of a small-but-capable model without reaching for a bigger, pricier one. So, ran it on real Terminal-Bench tasks and let the numbers decide. What I found:
