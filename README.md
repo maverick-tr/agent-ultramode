@@ -263,11 +263,10 @@ On any full benchmark most tasks have no headroom: the model either always solve
 
 - [x] **Standalone CLI** (`npx agent-ultramode`) so the loop runs anywhere, with any agent, no opencode required.
 - [x] **Multiple models in one pass** (repeatable `--agent`): spread attempts across different models, one neutral verifier picks the best.
-- [x] **OpenCode, Claude Code, and cline** verified end to end.
+- [x] **First-class integrations for opencode, Claude Code, and Grok**: a native `/ultra` command in each, all verified end to end. cline verified as an attempt runner.
 - [x] **Verifier-guided best-of-N repair** (v2): up to `--repair-n` critique-guided passes on the winner, keeping the first that passes your tests. Beats the oracle@N ceiling on SWE-bench Lite (91.7% vs 87.5%).
 - [x] **Adaptive early-exit** (v2): N becomes an upper bound; a test-passing attempt ends the run early with no quality trade-off.
-- [ ] **First-class agent integrations** (tuned defaults and a benchmark number) for Grok, Pi, and Codex.
-- [ ] Native slash-command or MCP packaging per agent. Contributions welcome.
+- [ ] Native `/ultra` for more hosts (Pi, Codex) and MCP packaging. Contributions welcome.
 
 ## Credits
 
