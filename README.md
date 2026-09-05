@@ -6,7 +6,7 @@
 
 Took the [LLM-as-a-Verifier](https://github.com/llm-as-a-verifier/llm-as-a-verifier) paper (Kwok et al., 2026) and turned it into a simple `/ultra` command for coding agents.
 
-> ### New in v2: repair climbs past the best-of-N ceiling, putting a mid-range flash model in the frontier's coding tier
+> ### New in v2: repair climbs past the best-of-N ceiling, so the model you already have can reach frontier-tier results
 >
 > Picking the best of N attempts can never beat **oracle@N**. If none of the attempts solved the task, selection cannot invent a fix. That ceiling is where every best-of-N method stops.
 >
@@ -14,7 +14,9 @@ Took the [LLM-as-a-Verifier](https://github.com/llm-as-a-verifier/llm-as-a-verif
 >
 > Plus **adaptive early-exit**: N is a budget, not a quota. The moment an attempt passes your tests, ultra takes it and abandons the rest.
 >
-> Stack that on the verify step and a small, non-vision flash model reaches **90.4%** on Terminal-Bench 2.1's coding subset, inside the band of GPT-5.6 Sol (89.5%), Claude Opus 5 (89.1%) and Grok 4.6 (88.4%), at a fraction of the per-token cost. Ours is best-of-5 against their pass@1, so read it as reaching the tier, not a like-for-like beat.
+> Stack that on the verify step and a small, non-vision flash model reaches **90.4%** on Terminal-Bench 2.1's coding subset, inside the band of GPT-5.6 Sol (89.5%), Claude Opus 5 (89.1%) and Grok 4.6 (88.4%). Ours is best-of-5 against their pass@1, so read it as reaching the tier, not a like-for-like beat.
+>
+> **That is the point of it.** If a frontier model is not an option for you, because you self-host, run on-prem or air-gapped, or your budget is capped, there has been no route to that tier. This is one: the same model you already run, sampled and verified differently, behind a single command.
 >
 > [How it works](#repair-and-early-exit-v2)
 
@@ -254,6 +256,8 @@ It significantly helps on the tasks that matter, and I can point at the per-task
 ## What this likely means at scale
 
 On any full benchmark most tasks have no headroom: the model either always solves them or never does, and a verifier changes neither. The lift concentrates on the minority of tasks the model *sometimes* solves, where selection can grab the passing attempt and repair can climb one rung higher. So on Terminal-Bench 2.1 the base-to-verify jump is a real **+8.9 points blended** (78.7% to 87.6%), and on the coding subset it lands at **90.4%**, but the honest reading is that the dramatic per-task gains average out into a moderate headline lift, larger on repair-friendly pure-code sets like SWE-bench than on mixed sets diluted by vision. Average lift moderate, per-recoverable-task lift large. Same fact, two views.
+
+An open question I have not tested: the same logic should apply to frontier models. The headroom for any model is `oracle@N - pass@1`, the tasks it solves on some sample but not reliably, and on this model that gap was huge (78.7% to 96.6%). If a frontier model has a similar spread, selection plus repair has room there too, and repair can go past oracle@N. I have not had the compute to check.
 
 ## Roadmap
 
