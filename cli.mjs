@@ -9,7 +9,7 @@
 // Node 18+ (uses global fetch and node:util parseArgs). Zero dependencies.
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
@@ -39,7 +39,31 @@ OPTIONS
       --repo <path>        repo to run in (default: current directory)
       --concurrency <int>  attempts to run at once (default 6)
       --effort <level>     verifier reasoning_effort (default none)
+      --test <cmd>         test command for the repair keep-check (else auto-detected:
+                           npm test / pytest / cargo / go). Passing exit code = ok.
+      --repair-agent <cmd> agent for the repair pass ("{task}" substituted; default: --agent)
+      --repair-n <int>     repair attempts to run, 1 to 5 (default 2; env ULTRA_REPAIR_N).
+                           Keeps the best that verifies; never worse than the winner.
+      --no-repair          disable the verifier-guided repair pass (on by default)
+      --no-early-exit      disable adaptive early-exit (on by default when a test
+                           command is available)
   -h, --help               show this help
+
+REPAIR (on by default; ULTRA_REPAIR=0 or --no-repair to disable)
+  After the tournament picks a winner, ultra critiques it and runs --repair-n
+  guided repair passes (default 2), each in its own worktree seeded with the
+  winner's diff and the same critique, then keeps the best that verifies:
+  with a test command, the first repair that PASSES the tests; otherwise the
+  first repair the reasoned verifier clearly prefers over the winner. If none
+  qualify, the winner is kept. So repair can lift the result past the best-of-N
+  ceiling, and the applied result is never worse than the tournament winner.
+
+ADAPTIVE EARLY-EXIT (on by default; --no-early-exit or ULTRA_NO_EARLY_EXIT=1 to disable)
+  N is an upper bound. If an attempt PASSES the repo's tests (--test or an
+  auto-detected npm/pytest/cargo/go command), ultra takes it as a verified
+  winner, abandons the still-running attempts, and skips the tournament and
+  repair. Only this hard signal stops early; low verifier confidence never does,
+  so the result can never be worse than running all N.
 
 EXAMPLES
   # default: opencode as the per-attempt agent, verify with your OpenAI key
@@ -131,6 +155,71 @@ async function tournament(C, task, summaries) {
   return { ranked, conf: ratio(ranked[0]) - ratio(ranked[1]) }
 }
 
+// --- verifier-guided repair (generic: never benchmark-specific) ------------
+// After the tournament picks a winner, critique it and run one guided repair
+// pass, then KEEP the repair only when it verifies as better (repo's own tests
+// if available, else the reasoned verifier). So repair can only help, not hurt.
+
+async function critique(C, task, diff, log) {
+  const prompt =
+    `A coding task and the patch a verifier selected as the best of several attempts. You are a strict ` +
+    `reviewer. In 3-5 sentences name the MOST LIKELY remaining problems: missed edge cases, incomplete ` +
+    `coverage, wrong root cause, or regressions it could introduce. If it looks fully correct, say so and ` +
+    `name the single thing most worth double-checking. Be concrete and actionable.\n\n` +
+    `TASK:\n${task}\n\nPATCH:\n${diff.slice(0, 6000)}\n\nAGENT LOG (tail):\n${(log || "").slice(-1200)}\n\nReview:`
+  try { return (await chat(C, prompt)).trim().slice(0, 1500) } catch { return "" }
+}
+
+const XDG_ENV = (d) => ({
+  ...process.env, XDG_DATA_HOME: d, XDG_STATE_HOME: d, XDG_CACHE_HOME: d,
+  OPENCODE_DISABLE_DEFAULT_PLUGINS: "1", OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_MODELS_FETCH: "1",
+})
+
+// run an agent command inside a fresh worktree (optionally pre-seeded with a
+// base diff), return the full diff off `base` + the log tail.
+async function agentInWorktree(repo, base, work, tag, agentCmd, taskText, seedDiff, timeout) {
+  const wt = join(work, tag)
+  await git(repo, "worktree", "add", "--detach", wt, base)
+  if (seedDiff && seedDiff.trim()) {
+    const p = join(work, `${tag}.seed.patch`); await writeFile(p, seedDiff)
+    await git(wt, "apply", "--3way", p).catch(() => {})
+  }
+  const cmd = agentCmd.replace("{task}", taskText.replace(/"/g, '\\"'))
+  const d = join(work, `${tag}-xdg`); await mkdir(d, { recursive: true }).catch(() => {})
+  let log = ""
+  try {
+    const { stdout, stderr } = await execFileP("bash", ["-lc", `exec </dev/null; ${cmd}`], { cwd: wt, env: XDG_ENV(d), timeout, maxBuffer: 32 * 1024 * 1024 })
+    log = (stdout || "") + (stderr || "")
+  } catch (e) { log = `agent error: ${e?.message || e}` }
+  await git(wt, "add", "-A").catch(() => {})
+  const diff = await git(wt, "diff", "--cached").catch(() => "")
+  await git(repo, "worktree", "remove", "--force", wt).catch(() => {})
+  return { diff, log }
+}
+
+// true iff `testCmd` exits 0 in a fresh worktree with `diff` applied.
+async function runTests(repo, base, work, tag, diff, testCmd, timeout) {
+  const wt = join(work, `t-${tag}`)
+  await git(repo, "worktree", "add", "--detach", wt, base)
+  try {
+    if (diff.trim()) { const p = join(work, `t-${tag}.patch`); await writeFile(p, diff); await git(wt, "apply", "--3way", p).catch(() => {}) }
+    await execFileP("bash", ["-lc", `exec </dev/null; ${testCmd}`], { cwd: wt, env: process.env, timeout, maxBuffer: 32 * 1024 * 1024 })
+    return true
+  } catch { return false }
+  finally { await git(repo, "worktree", "remove", "--force", wt).catch(() => {}) }
+}
+
+// auto-detect a repo test command if the user didn't pass --test.
+async function detectTestCmd(repo) {
+  const has = async (f) => !!(await readFile(join(repo, f), "utf8").catch(() => ""))
+  const pkg = await readFile(join(repo, "package.json"), "utf8").catch(() => "")
+  if (pkg && /"test"\s*:/.test(pkg) && !/no test specified/.test(pkg)) return "npm test --silent"
+  if (await has("pytest.ini") || await has("pyproject.toml") || await has("setup.cfg") || await has("tox.ini")) return "python -m pytest -q"
+  if (await has("Cargo.toml")) return "cargo test -q"
+  if (await has("go.mod")) return "go test ./..."
+  return ""
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -146,6 +235,11 @@ async function main() {
       repo: { type: "string" },
       concurrency: { type: "string" },
       effort: { type: "string" },
+      "no-repair": { type: "boolean" },
+      "no-early-exit": { type: "boolean" },
+      "repair-agent": { type: "string" },
+      "repair-n": { type: "string" },
+      test: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   })
@@ -160,6 +254,11 @@ async function main() {
   const conf = Number(values.conf ?? 0.34)
   const cc = int(values.concurrency, 6, 1, 12)
   const agentTimeout = 600000
+  const doRepair = !values["no-repair"] && process.env.ULTRA_REPAIR !== "0"
+  const repairN = int(values["repair-n"] ?? process.env.ULTRA_REPAIR_N, 2, 1, 5)
+  const earlyExit = !values["no-early-exit"] && process.env.ULTRA_NO_EARLY_EXIT !== "1"
+  const repairAgent = values["repair-agent"] || (agents[0] || 'opencode run "{task}"')
+  let testCmd = values.test ?? process.env.ULTRA_TEST ?? ""
   const C = {
     verifyModel: values["verify-model"] || process.env.ULTRA_VERIFY_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini",
     baseURL: values["base-url"] || process.env.OPENAI_BASE_URL || process.env.ULTRA_BASE_URL || "https://api.openai.com/v1",
@@ -204,25 +303,62 @@ async function main() {
     }
     const limit = pLimit(Math.max(1, Math.min(cc, n)))
     const esc = task.replace(/"/g, '\\"')
-    const outs = await Promise.all(worktrees.map((wt, i) => limit(async () => {
+
+    // Adaptive early-exit (#141): N is an upper bound. If a completed attempt
+    // PASSES the repo's tests (a hard, non-regressible signal), take it as the
+    // verified winner, abandon the still-running/queued attempts, and skip the
+    // tournament + repair. Low verifier confidence never stops early, so the
+    // result can never be worse than running all N.
+    if (earlyExit && testCmd === "") testCmd = await detectTestCmd(repo)
+    const exitTestCmd = earlyExit ? testCmd : ""
+    if (exitTestCmd) err(`>>> early-exit armed: stop as soon as an attempt passes '${exitTestCmd}'`)
+    const ac = new AbortController()
+    let verified = null
+    const outs = new Array(n)
+
+    const runAgent = (wt, i) => new Promise((resolve) => {
       const cmd = agents[i % agents.length].replace("{task}", esc)
       const d = join(work, `xdg-${i}`)
-      await mkdir(d, { recursive: true }).catch(() => {})
-      const env = {
-        ...process.env,
-        XDG_DATA_HOME: d, XDG_STATE_HOME: d, XDG_CACHE_HOME: d,
-        OPENCODE_DISABLE_DEFAULT_PLUGINS: "1", OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_MODELS_FETCH: "1",
-      }
-      let log = ""
-      try {
-        const { stdout, stderr } = await execFileP("bash", ["-lc", `exec </dev/null; ${cmd}`], { cwd: wt, env, timeout: agentTimeout, maxBuffer: 32 * 1024 * 1024 })
-        log = (stdout || "") + (stderr || "")
-      } catch (e) { log = `agent error: ${e?.message || e}` }
+      mkdir(d, { recursive: true }).catch(() => {}).finally(() => {
+        const env = {
+          ...process.env,
+          XDG_DATA_HOME: d, XDG_STATE_HOME: d, XDG_CACHE_HOME: d,
+          OPENCODE_DISABLE_DEFAULT_PLUGINS: "1", OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_MODELS_FETCH: "1",
+        }
+        const child = execFile("bash", ["-lc", `exec </dev/null; ${cmd}`],
+          { cwd: wt, env, timeout: agentTimeout, maxBuffer: 32 * 1024 * 1024, detached: true },
+          (e, stdout, stderr) => resolve(((stdout || "") + (stderr || "")) || (e ? `agent error: ${e?.message || e}` : "")))
+        // if a verified winner is found elsewhere, kill this attempt's process group
+        ac.signal.addEventListener("abort", () => { try { process.kill(-child.pid, "SIGTERM") } catch {} }, { once: true })
+      })
+    })
+
+    await Promise.all(worktrees.map((wt, i) => limit(async () => {
+      if (ac.signal.aborted) return            // verified winner already found; don't start queued attempts
+      const log = await runAgent(wt, i)
       await git(wt, "add", "-A").catch(() => {})
       const diff = await git(wt, "diff", "--cached").catch(() => "")
+      outs[i] = { diff, log, summary: `AGENT LOG (tail):\n${log.slice(-1500)}\n\nDIFF:\n${diff.slice(0, 6000) || "(no changes)"}` }
       err(`    attempt ${i} [${binOf(agents[i % agents.length])}]: ${diff ? diff.length + " diff chars" : "no changes"}`)
-      return { diff, summary: `AGENT LOG (tail):\n${log.slice(-1500)}\n\nDIFF:\n${diff.slice(0, 6000) || "(no changes)"}` }
+      if (exitTestCmd && !verified && diff.trim()) {
+        const pass = await runTests(repo, base, work, `ee-${i}`, diff, exitTestCmd, agentTimeout)
+        if (pass && !verified) { verified = { i, ...outs[i] }; err(`    ✔ attempt ${i} PASSED tests; abandoning the rest`); ac.abort() }
+      }
     })))
+
+    // verified fast path: a test-passing attempt is correct by the repo's own
+    // criterion, so apply it directly (no tournament, no repair, no regression).
+    if (verified && verified.diff.trim()) {
+      const patch = join(work, "winner.patch")
+      await writeFile(patch, verified.diff)
+      try {
+        await git(repo, "apply", "--3way", patch)
+        console.log(`\n🏆 attempt ${verified.i} passed the repo's tests (${exitTestCmd}); applied it and abandoned the rest. Review, then commit.`)
+      } catch (e) {
+        console.log(`\nattempt ${verified.i} passed tests but the patch did not apply cleanly (${e?.message || e}). The diff:\n\n${verified.diff.slice(0, 8000)}`)
+      }
+      return
+    }
 
     const diffs = outs.map((o) => o.diff)
     const summaries = outs.map((o) => o.summary)
@@ -234,6 +370,59 @@ async function main() {
     err(`>>> verify: probabilistic pivot tournament (${C.verifyModel}) ...`)
     const { ranked, conf: margin } = await tournament(C, task, summaries)
     const best = ranked[0]
+
+    // --- repair: critique the winner, run repairN guided passes, keep the best that verifies.
+    // Best-of-N repair (regression-safe): fan out repairN attempts off `base`, each seeded with
+    // the winner's diff and the SAME critique injected (one critique, reused). Keep-policy:
+    //   * with tests: keep the FIRST repair that PASSES the repo's tests; else keep the winner.
+    //     (a passing repair is correct by the repo's own criterion, so it cannot regress.)
+    //   * without tests: keep the FIRST repair the reasoned verifier CLEARLY prefers over the
+    //     current winner (same >k/2 threshold as before); else keep the winner.
+    // INVARIANT: the final applied result is never worse than the tournament winner.
+    if (doRepair && diffs[best].trim()) {
+      err(`>>> repair: critique + ${repairN} guided pass(es) on the winner (keep the best that verifies) ...`)
+      const crit = await critique(C, task, diffs[best], outs[best].log)
+      const rtask =
+        `${task}\n\n--- A previous attempt (already applied to your working tree) produced a partial ` +
+        `solution. A reviewer flagged the issues below. Improve and COMPLETE it, keeping what is correct; ` +
+        `verify before finishing. ---\nREVIEWER NOTES:\n${crit}`
+      if (testCmd === "") testCmd = await detectTestCmd(repo)
+      // run the repairN attempts in parallel, honoring the concurrency limiter (cc).
+      const rlimit = pLimit(C.cc)
+      const reps = await Promise.all(Array.from({ length: repairN }, (_, r) => rlimit(async () => {
+        const rr = await agentInWorktree(repo, base, work, `repair-${r}`, repairAgent, rtask, diffs[best], agentTimeout)
+        const rsum = `AGENT LOG (tail):\n${rr.log.slice(-1500)}\n\nDIFF:\n${rr.diff.slice(0, 6000) || "(no changes)"}`
+        err(`    repair ${r} [${binOf(repairAgent)}]: ${rr.diff ? rr.diff.length + " diff chars" : "no changes"}`)
+        return { diff: rr.diff, summary: rsum }
+      })))
+      // only real, changed candidates are eligible.
+      const cands = reps.filter((x) => x.diff.trim() && x.diff !== diffs[best])
+      let kept = false, why = ""
+      if (!cands.length) { err(`    repair produced no new change; winner kept`) }
+      else if (testCmd) {
+        // regression-safe: keep the FIRST repair that PASSES the repo's own tests.
+        err(`    keep-check: running tests (${testCmd}) on ${cands.length} repair candidate(s) ...`)
+        for (let r = 0; r < cands.length; r++) {
+          const pass = await runTests(repo, base, work, `rep-${r}`, cands[r].diff, testCmd, agentTimeout)
+          if (pass) { diffs[best] = cands[r].diff; summaries[best] = cands[r].summary; kept = true; why = `repair ${r} passes the tests`; break }
+        }
+        if (!kept) why = "no repair passed the tests"
+      } else {
+        // no tests: keep the FIRST repair the verifier CLEARLY prefers over the current winner.
+        const preferRepair = async (rsum) => {   // reasoned verifier: keep repair only if it clearly wins
+          const limit = pLimit(C.cc)
+          const votes = await Promise.all(Array.from({ length: C.k }, () => judge(C, limit, task, summaries[best], rsum)))
+          return votes.filter((v) => v === "B").length > C.k / 2   // B = repaired
+        }
+        for (let r = 0; r < cands.length; r++) {
+          if (await preferRepair(cands[r].summary)) { diffs[best] = cands[r].diff; summaries[best] = cands[r].summary; kept = true; why = `verifier prefers repair ${r}`; break }
+        }
+        if (!kept) why = "verifier keeps winner"
+      }
+      if (kept) err(`    ✔ repair KEPT (${why})`)
+      else if (cands.length) err(`    all repairs discarded (${why})`)
+    }
+
     const nonEmpty = diffs.filter((d) => d.trim()).length
     const majority = nonEmpty >= Math.max(2, Math.ceil(n / 2))
 

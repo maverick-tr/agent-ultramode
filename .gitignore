@@ -3,3 +3,10 @@ node_modules/
 out.mp4
 *.log
 dist/
+
+# Local-only working files. Everything else in the repo is either needed to
+# run ultra, part of the docs, or a standard community-health file.
+social.md
+viz/*.html
+viz/*_social.png
+.grok-plugin/

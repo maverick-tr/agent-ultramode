@@ -8,9 +8,11 @@
  *   low  confidence -> shows you the top candidates and applies nothing
  * (a low-confidence pick is a coin flip and should not be applied silently).
  *
- * This is the version validated on Terminal-Bench: plan-first best-of-N gave no edge,
- * but best-of-N over full trajectories + this verifier lifted the recoverable tasks
- * from 40% to 75% (n=15, same model, no cross-model dependency).
+ * Validated on Terminal-Bench 2.1 (89 tasks, same model as the solver, no cross-model
+ * dependency): base@1 78.7% -> 87.6% with best-of-5 and this verifier, against an
+ * oracle@5 ceiling of 96.6%. Plan-first best-of-N gave no edge; best-of-N over full
+ * trajectories is what moved the number. On 24 SWE-bench-style django/pytest tasks,
+ * verifier-guided repair reached 91.7%, above the 87.5% oracle@5 of the attempts.
  *
  * Install (opencode.json):
  *   { "plugin": [ ["file:///abs/path/ultra.ts", { "model": "provider/model", "n": 5 }] ] }
@@ -22,14 +24,14 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 
 const execFileP = promisify(execFile)
 type Opts = Record<string, any>
-const VERSION = "0821g"
+const VERSION = "v2-0824r"
 
 interface Cfg {
   url: string
@@ -45,6 +47,10 @@ interface Cfg {
   judgeTokens: number
   cc: number
   agentTimeoutMs: number
+  repair: boolean
+  repairN: number
+  repairAgent: string
+  testCmd: string
 }
 
 const num = (v: any, def: number, lo: number, hi: number): number => {
@@ -75,6 +81,12 @@ function buildCfg(opts: Opts): Cfg {
     judgeTokens: num(opts.judgeTokens ?? process.env.ULTRA_JUDGE_TOKENS, 12000, 500, 200000),
     cc: num(opts.concurrency ?? process.env.ULTRA_CC, 6, 1, 12),
     agentTimeoutMs: num(opts.agentTimeout ?? process.env.ULTRA_AGENT_TIMEOUT, 600000, 30000, 1800000),
+    // verifier-guided repair: on by default; a repaired winner is kept only when it verifies better.
+    repair: String(opts.repair ?? process.env.ULTRA_REPAIR ?? "1") !== "0" && opts.repair !== false,
+    // best-of-N repair: run this many repair attempts, keep the best that verifies (never worse than the winner).
+    repairN: num(opts.repairN ?? process.env.ULTRA_REPAIR_N, 2, 1, 5),
+    repairAgent: String(opts.repairAgent ?? process.env.ULTRA_REPAIR_AGENT ?? opts.agent ?? process.env.ULTRA_AGENT ?? 'opencode run "{task}"'),
+    testCmd: String(opts.test ?? process.env.ULTRA_TEST ?? ""),
   }
 }
 
@@ -163,6 +175,44 @@ async function tournament(C: Cfg, task: string, summaries: string[]): Promise<{ 
   return { ranked, conf: ratio(ranked[0]) - ratio(ranked[1]) }
 }
 
+// ---- verifier-guided repair (generic; never benchmark-specific) -------------------------
+// After the tournament, critique the winner and run ONE guided repair pass, then keep the
+// repair ONLY when it verifies as better (the repo's own tests if available, else the
+// reasoned verifier). Repair can lift past the best-of-N ceiling, and never makes it worse.
+
+async function critique(C: Cfg, task: string, diff: string, log: string): Promise<string> {
+  const prompt =
+    `A coding task and the patch a verifier selected as the best of several attempts. You are a strict ` +
+    `reviewer. In 3-5 sentences name the MOST LIKELY remaining problems: missed edge cases, incomplete ` +
+    `coverage, wrong root cause, or regressions it could introduce. If it looks fully correct, say so and ` +
+    `name the single thing most worth double-checking. Be concrete and actionable.\n\n` +
+    `TASK:\n${task}\n\nPATCH:\n${diff.slice(0, 6000)}\n\nAGENT LOG (tail):\n${(log || "").slice(-1200)}\n\nReview:`
+  try { return (await chat(C, prompt)).trim().slice(0, 1500) } catch { return "" }
+}
+
+// auto-detect a repo test command when the user did not pass one.
+async function detectTestCmd(dir: string): Promise<string> {
+  const read = (f: string) => readFile(join(dir, f), "utf8").catch(() => "")
+  const pkg = await read("package.json")
+  if (pkg && /"test"\s*:/.test(pkg) && !/no test specified/.test(pkg)) return "npm test --silent"
+  if (await read("pytest.ini") || await read("pyproject.toml") || await read("setup.cfg") || await read("tox.ini")) return "python -m pytest -q"
+  if (await read("Cargo.toml")) return "cargo test -q"
+  if (await read("go.mod")) return "go test ./..."
+  return ""
+}
+
+// true iff `testCmd` exits 0 in a fresh worktree with `diff` applied.
+async function runTests(dir: string, base: string, work: string, tag: string, diff: string, testCmd: string, timeout: number, abort?: AbortSignal): Promise<boolean> {
+  const wt = join(work, `t-${tag}`)
+  await git(dir, "worktree", "add", "--detach", wt, base)
+  try {
+    if (diff.trim()) { const p = join(work, `t-${tag}.patch`); await writeFile(p, diff); await git(wt, "apply", "--3way", p).catch(() => {}) }
+    await execFileP("bash", ["-lc", `exec </dev/null; ${testCmd}`], { cwd: wt, env: process.env, timeout, maxBuffer: 32 * 1024 * 1024, signal: abort })
+    return true
+  } catch { return false }
+  finally { await git(dir, "worktree", "remove", "--force", wt).catch(() => {}) }
+}
+
 // ---- lean sandbox for sub-agent attempts ------------------------------------------------
 // Sub-agents run under XDG_CONFIG_HOME -> a provider-only config so they skip the user's MCP
 // servers and plugins (the slow part). Deps install once into the sandbox and cache forever.
@@ -204,9 +254,10 @@ export const Ultra: Plugin = async (_input, options) => {
 
   const ultra = tool({
     description:
-      "Best-of-N with a verifier. Runs a coding/terminal task N times in isolated git worktrees, ranks the " +
-      "attempts with the same model as a verifier, and applies the winning diff when confident (otherwise " +
-      "reports the top candidates). Use for a task worth spending compute to get right the first time.",
+      "v2: Best-of-N with a verifier + repair. Runs a coding/terminal task N times in isolated git worktrees, " +
+      "ranks the attempts with the same model as a verifier, then runs one critique-guided REPAIR pass on the " +
+      "winner and keeps it only if it verifies better (the repo's tests, else the verifier). Applies the " +
+      "result when confident (otherwise reports the top candidates). For a task worth getting right the first time.",
     args: {
       task: tool.schema.string().describe("The task to solve N times and verify. Be specific."),
     },
@@ -277,25 +328,59 @@ export const Ultra: Plugin = async (_input, options) => {
           worktrees.push(wt)
         }
 
-        // Run the agent in each worktree IN PARALLEL (lean sandbox keeps this cheap).
+        // Adaptive early-exit (#141): N is an upper bound. If an attempt PASSES the
+        // repo's tests (a hard, non-regressible signal), take it as the verified winner,
+        // abandon the still-running/queued attempts, and skip the tournament + repair.
+        // Low verifier confidence never stops early, so the result can never be worse
+        // than running all N. Off with earlyExit:false or ULTRA_NO_EARLY_EXIT=1.
+        const earlyExit = (eff as any).earlyExit !== false && process.env.ULTRA_NO_EARLY_EXIT !== "1"
+        let testCmd = eff.testCmd || (await detectTestCmd(dir))
+        const exitTestCmd = earlyExit ? testCmd : ""
+        // one combined abort: fires on host cancel (ctx.abort) OR our verified-winner signal.
+        const ee = new AbortController()
+        try { (ctx.abort as AbortSignal | undefined)?.addEventListener?.("abort", () => ee.abort(), { once: true }) } catch {}
+        let verified: { i: number; diff: string; log: string; summary: string } | null = null
+
+        // Run the agent in each worktree IN PARALLEL (lean sandbox keeps this light).
         const limit = pLimit(Math.max(1, Math.min(eff.cc, eff.n)))
         let done = 0
         status(`ultra: running ${eff.n} attempts in parallel...`)
-        toast(`running ${eff.n} attempts in parallel`)
+        toast(`running ${eff.n} attempts in parallel${exitTestCmd ? `, early-exit on '${exitTestCmd}'` : ""}`)
         const outs = await Promise.all(worktrees.map((wt, i) => limit(async () => {
+          if (ee.signal.aborted) return null   // verified winner already found; skip queued attempts
           const env = await isolatedEnv(String(i))
           let log = ""
           try {
-            const { stdout, stderr } = await execFileP("bash", ["-lc", `exec </dev/null; ${cmd}`], { cwd: wt, env, timeout: eff.agentTimeoutMs, maxBuffer: 32 * 1024 * 1024, signal: ctx.abort })
+            const { stdout, stderr } = await execFileP("bash", ["-lc", `exec </dev/null; ${cmd}`], { cwd: wt, env, timeout: eff.agentTimeoutMs, maxBuffer: 32 * 1024 * 1024, signal: ee.signal })
             log = (stdout || "") + (stderr || "")
           } catch (e: any) { log = `agent error: ${e?.message || e}` }
           await git(wt, "add", "-A").catch(() => {})
           const diff = await git(wt, "diff", "--cached").catch(() => "")
           done++
           status(`ultra: ${done}/${eff.n} attempts done`, `attempt ${i}: ${diff ? diff.length + " diff chars" : "no changes"}`)
-          return { diff, summary: `AGENT LOG (tail):\n${log.slice(-1500)}\n\nDIFF:\n${diff.slice(0, 6000) || "(no changes)"}` }
+          const out = { diff, log, summary: `AGENT LOG (tail):\n${log.slice(-1500)}\n\nDIFF:\n${diff.slice(0, 6000) || "(no changes)"}` }
+          if (exitTestCmd && !verified && diff.trim()) {
+            const pass = await runTests(dir, base, work, `ee-${i}`, diff, exitTestCmd, eff.agentTimeoutMs, ee.signal)
+            if (pass && !verified) { verified = { i, ...out }; toast(`attempt ${i} passed tests; abandoning the rest`, "success"); ee.abort() }
+          }
+          return out
         })))
-        for (const o of outs) { diffs.push(o.diff); summaries.push(o.summary) }
+        const completed = outs.filter((o): o is { diff: string; log: string; summary: string } => !!o)
+        for (const o of completed) { diffs.push(o.diff); summaries.push(o.summary) }
+
+        // verified fast path: a test-passing attempt is correct by the repo's own
+        // criterion, so apply it directly (no tournament, no repair, no regression).
+        if (verified && verified.diff.trim()) {
+          const patch = join(work, "winner.patch")
+          await writeFile(patch, verified.diff)
+          try {
+            await git(dir, "apply", "--3way", patch)
+            toast("applied the verified winner", "success")
+            return `🏆 ultra: attempt ${verified.i} passed the repo's tests (${exitTestCmd}); applied it and abandoned the rest. Review it before committing.`
+          } catch (e: any) {
+            return `ultra: attempt ${verified.i} passed tests but the patch did not apply cleanly (${e?.message || e}). The diff:\n\n\`\`\`diff\n${verified.diff.slice(0, 6000)}\n\`\`\``
+          }
+        }
 
         if (diffs.every((d) => !d.trim())) {
           return `ultra ran ${eff.n} attempts but none made any changes (all diffs empty). The sub-agent could not act: the task may be too ambiguous, or the sandbox model could not reach its endpoint. Try a more specific task, or check the model endpoint.`
@@ -305,6 +390,73 @@ export const Ultra: Plugin = async (_input, options) => {
         toast(`verifying ${eff.n} candidates`)
         const { ranked, conf } = await tournament(eff, task, summaries)
         const best = ranked[0]
+
+        // --- repair: critique the winner, run repairN guided passes, keep the best that verifies -----
+        // Best-of-N repair (regression-safe): fan out eff.repairN attempts off `base`, each seeded
+        // with the winner's diff and the SAME critique injected (one critique, reused). Keep-policy:
+        //   * with tests: keep the FIRST repair that PASSES the repo's tests; else keep the winner.
+        //     (a passing repair is correct by the repo's own criterion, so it cannot regress.)
+        //   * without tests: keep the FIRST repair the reasoned verifier CLEARLY prefers over the
+        //     current winner (same >k/2 threshold as before); else keep the winner.
+        // INVARIANT: the final applied result is never worse than the tournament winner.
+        if (eff.repair && diffs[best].trim()) {
+          status(`ultra: repair, ${eff.repairN} critique-guided pass(es) on the winner...`)
+          toast(`repair: ${eff.repairN} pass(es) on the winner`)
+          const crit = await critique(eff, task, diffs[best], completed[best].log)
+          const rtask =
+            `${task}\n\n--- A previous attempt (already applied to your working tree) produced a partial ` +
+            `solution. A reviewer flagged the issues below. Improve and COMPLETE it, keeping what is correct; ` +
+            `verify before finishing. ---\nREVIEWER NOTES:\n${crit}`
+          const rcmd = eff.repairAgent.replace("{task}", rtask.replace(/"/g, '\\"'))
+          // run one seeded repair attempt in its own worktree; returns its diff + summary.
+          const runRepair = async (r: number): Promise<{ diff: string; summary: string }> => {
+            const rwt = join(work, `repair-${r}`)
+            await git(dir, "worktree", "add", "--detach", rwt, base)
+            worktrees.push(rwt)
+            const wpatch = join(work, `winner-for-repair-${r}.patch`)
+            await writeFile(wpatch, diffs[best])
+            await git(rwt, "apply", "--3way", wpatch).catch(() => {})
+            const renv = await isolatedEnv(`repair-${r}`)
+            let rlog = ""
+            try {
+              const { stdout, stderr } = await execFileP("bash", ["-lc", `exec </dev/null; ${rcmd}`], { cwd: rwt, env: renv, timeout: eff.agentTimeoutMs, maxBuffer: 32 * 1024 * 1024, signal: ctx.abort })
+              rlog = (stdout || "") + (stderr || "")
+            } catch (e: any) { rlog = `agent error: ${e?.message || e}` }
+            await git(rwt, "add", "-A").catch(() => {})
+            const rdiff = await git(rwt, "diff", "--cached").catch(() => "")
+            const rsum = `AGENT LOG (tail):\n${rlog.slice(-1500)}\n\nDIFF:\n${rdiff.slice(0, 6000) || "(no changes)"}`
+            return { diff: rdiff, summary: rsum }
+          }
+          // run the repairN attempts in parallel, honoring the concurrency limiter (cc).
+          const rlimit = pLimit(eff.cc)
+          const reps = await Promise.all(Array.from({ length: eff.repairN }, (_, r) => rlimit(() => runRepair(r))))
+          // only real, changed candidates are eligible.
+          const cands = reps.filter((x) => x.diff.trim() && x.diff !== diffs[best])
+          let kept = false, why = ""
+          if (!cands.length) { status("ultra: repair produced no new change; winner kept") }
+          else if (testCmd) {
+            // regression-safe: keep the FIRST repair that PASSES the repo's own tests.
+            status(`ultra: repair keep-check (tests: ${testCmd}) on ${cands.length} candidate(s)...`)
+            for (let r = 0; r < cands.length; r++) {
+              const pass = await runTests(dir, base, work, `rep-${r}`, cands[r].diff, testCmd, eff.agentTimeoutMs, ctx.abort)
+              if (pass) { diffs[best] = cands[r].diff; summaries[best] = cands[r].summary; kept = true; why = `repair ${r} passes the tests`; break }
+            }
+            if (!kept) why = "no repair passed the tests"
+          } else {
+            // no tests: keep the FIRST repair the verifier CLEARLY prefers over the current winner.
+            const preferRepair = async (rsum: string) => {
+              const lim = pLimit(eff.cc)
+              const votes = await Promise.all(Array.from({ length: eff.k }, () => judge(eff, lim, task, summaries[best], rsum)))
+              return votes.filter((v) => v === "B").length > eff.k / 2  // B = repaired
+            }
+            for (let r = 0; r < cands.length; r++) {
+              if (await preferRepair(cands[r].summary)) { diffs[best] = cands[r].diff; summaries[best] = cands[r].summary; kept = true; why = `verifier prefers repair ${r}`; break }
+            }
+            if (!kept) why = "verifier keeps winner"
+          }
+          if (kept) { toast(`repair kept (${why})`, "success"); status(`ultra: repair kept (${why})`) }
+          else if (cands.length) status(`ultra: all repairs discarded (${why})`)
+        }
 
         // Normalised added-lines of a diff, so we can tell when attempts AGREE on the same change.
         const nonEmpty = diffs.filter((d) => d.trim()).length
@@ -345,7 +497,7 @@ export const Ultra: Plugin = async (_input, options) => {
     config: async (cfg: any) => {
       cfg.command = {
         ultra: {
-          description: "Best-of-N + verifier: run the task N times in isolated worktrees, apply the best. /ultra <task>",
+          description: "[v2] Best-of-N + verifier + repair: runs the task N times in isolated worktrees, verifies, then repairs the winner toward best-of-N. /ultra <task>",
           template:
             "Call the `ultra` tool exactly once, with `task` set to the request below. It runs the task several " +
             "times in isolated git worktrees and verifies the results. When it returns, report to the user exactly " +
@@ -357,7 +509,7 @@ export const Ultra: Plugin = async (_input, options) => {
       // routes each request through best-of-N. Sub-attempts run the default agent, so no recursion.
       cfg.agent = {
         ultra: {
-          description: "Best-of-N mode: run the request N times in isolated worktrees and apply the verified winner.",
+          description: "[v2] Best-of-N + repair mode: run the request N times in isolated worktrees, verify, repair, then apply the verified winner.",
           mode: "primary",
           color: "#A855F7",
           prompt:
