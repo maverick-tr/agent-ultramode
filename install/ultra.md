@@ -15,6 +15,8 @@ $ARGUMENTS
 Fan out and repair with whichever subagent tool your platform gives you:
 - **Grok Build:** `spawn_subagent` with `background: true`, `isolation: worktree`, `capability_mode: all`; collect results with `get_command_or_subagent_output`; for repair, spawn with `resume_from` set to the winner's subagent ID.
 - **Claude Code (and compatible agents):** the `Agent` tool (formerly `Task`) with `subagent_type: "general-purpose"`; launch all attempts in ONE message so they run in parallel; tell each attempt to work in its own `mktemp -d` so they never collide; for repair, launch a fresh `Agent` call whose prompt carries the winner's full solution plus your critique.
+- **Codex:** `spawn_agent`, once per attempt, so they run concurrently (spawned agents inherit your model, which is what keeps the verifier same-model); collect with `wait_agent`; for repair, `spawn_agent` again with the winner's full solution plus your critique.
+- **Anything else (Gemini CLI, and hosts with a generic task tool):** use whatever subagent or task tool you have, launching all attempts before collecting any result. If the host gives you no way to spawn subagents at all, run the attempts one after another, each in its own `mktemp -d`. Best-of-N, verification and repair all still work; you just lose the parallelism.
 
 Use only the one you actually have. The rest of these steps are the same either way.
 
@@ -24,7 +26,7 @@ Use only the one you actually have. The rest of these steps are the same either 
 - Track the phases with a TODO list (fan out, verify, repair, deliver) so progress is visible.
 
 ## 2. Fan out N attempts, in parallel
-Start all `N` attempts in a SINGLE message, before collecting any result, so they genuinely run concurrently rather than one after another. On Claude Code that means calling the `Agent` tool (formerly `Task`, still accepted as an alias) `N` times in one message, each with `subagent_type: "general-purpose"`. On Grok, spawn all `N` with `spawn_subagent` and `background: true`. Give each the attempt prompt below, with the task substituted, and a description like `"ultra attempt <i>"`.
+Start all `N` attempts in a SINGLE message, before collecting any result, so they genuinely run concurrently rather than one after another. On Claude Code that means calling the `Agent` tool (formerly `Task`, still accepted as an alias) `N` times in one message, each with `subagent_type: "general-purpose"`. On Grok, spawn all `N` with `spawn_subagent` and `background: true`. On Codex, issue `N` `spawn_agent` calls before any `wait_agent`. Give each the attempt prompt below, with the task substituted, and a description like `"ultra attempt <i>"`.
 
 Attempt prompt (use for every attempt):
 
