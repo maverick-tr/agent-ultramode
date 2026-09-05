@@ -1,0 +1,28 @@
+{
+  "name": "agent-ultramode",
+  "owner": {
+    "name": "maverick-tr"
+  },
+  "plugins": [
+    {
+      "name": "agent-ultramode",
+      "source": "./",
+      "description": "ultra: best-of-N trajectories with a reasoned verifier and guided repair. /ultra runs N isolated attempts in parallel, picks the strongest with a skeptical verifier, then runs one guided repair pass that is kept only if it is better.",
+      "version": "0.2.0",
+      "author": {
+        "name": "maverick-tr"
+      },
+      "homepage": "https://github.com/maverick-tr/agent-ultramode",
+      "repository": "https://github.com/maverick-tr/agent-ultramode",
+      "license": "MIT",
+      "keywords": [
+        "ultra",
+        "agent-ultramode",
+        "ultramode",
+        "best-of-n"
+      ],
+      "category": "productivity"
+    }
+  ],
+  "description": "ultra: best-of-N with a reasoned same-model verifier and guided repair, as a native /ultra command."
+}
